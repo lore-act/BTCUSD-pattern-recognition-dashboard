@@ -1,0 +1,922 @@
+================================== NODE JS, main code ============================================= 
+
+const https = require("https");
+const csv = require("csv-parser");
+const fs = require("fs");
+const path = require("path");
+let normalizedMA52024 = [];
+
+// here i calculate the sum among indexes over a determined period(which will be every 5 candles and then every 30 candles)
+
+function calculateMovingAverage(data, period) {
+  let movingAverage = [];
+
+  for (let i = 0; i < data.length; i++) {
+    if (i >= period - 1) {
+      let sum = 0;
+
+      for (let j = i - period + 1; j <= i; j++) {
+        sum += data[j];
+      }
+
+      movingAverage.push(sum / period);
+    } else {
+      movingAverage.push(null);
+    }
+  }
+
+  return movingAverage;
+}
+
+// this is just an exercise that calculates the difference between min and max value over a moving average
+// might be useful later
+
+function calculateMaxMinDiff(data, period) {
+  let maxMin = [];
+  for (let i = 0; i < data.length; i++) {
+    if (i >= period - 1) {
+      let min = Infinity;
+      let max = -Infinity;
+
+      for (let j = i - period + 1; j <= i; j++) {
+        if (data[j] < min) {
+          min = data[j];
+        }
+        if (data[j] > max) {
+          max = data[j];
+        }
+      }
+      maxMin.push(max - min);
+    } else {
+      maxMin.push(null);
+    }
+  }
+  return maxMin;
+}
+
+// check if the idx is greater than previous idx
+
+function checkIdx(arr, idx) {
+  if (idx <= 0 || arr[idx] === null || arr[idx - 1] === null) {
+    return false;
+  } else {
+    return arr[idx] > arr[idx - 1];
+  }
+}
+
+// set up MSE  (Mean Squared Error) for compare ma52024 to live ma5 also we had to remove the null values
+
+function mse(pattern1, pattern2) {
+  if (pattern1.length !== pattern2.length) return Infinity;
+  let sum = 0;
+  let count = 0;
+  for (let i = 0; i < pattern1.length; i++) {
+    if (pattern1[i] === null || pattern2[i] === null) continue;
+    sum += (pattern1[i] - pattern2[i]) ** 2;
+    count++;
+  }
+  return count > 0 ? sum / count : Infinity;
+}
+
+// normalize MSE due to price difference over different years
+function normalize(pattern) {
+  const mean = pattern.reduce((a, b) => a + b, 0) / pattern.length;
+  const std = Math.sqrt(
+    pattern.reduce((a, b) => a + (b - mean) ** 2, 0) / pattern.length
+  );
+  if (std === 0) return pattern.map(() => 0); // Avoid division by zero
+  return pattern.map((p) => (p - mean) / std);
+}
+
+// getting better directional  info about the patterns
+
+function getTrendDirection(values) {
+  const n = values.length;
+  const x = Array.from({ length: n }, (_, i) => i);
+  const y = values;
+
+  const sumX = x.reduce((a, b) => a + b, 0);
+  const sumY = y.reduce((a, b) => a + b, 0);
+  const sumXY = x.reduce((acc, val, i) => acc + val * y[i], 0);
+  const sumXX = x.reduce((acc, val) => acc + val * val, 0);
+
+  const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
+  return slope >= 0 ? "bullish" : "bearish";
+}
+
+// collecting past data from directory containing all .csv files --- year 2024 1 min candle---
+// outputting one array of arrays for the whole 2024 year
+
+let allData2024 = []; // this contain time and close price
+let onlyPriceClose2024 = []; // this contain only price
+let fileProcessed = 0;
+const dataFolder = path.join(__dirname, "2024_BTC_1mCandle");
+
+fs.readdir(dataFolder, function (err, files) {
+  if (err) {
+    console.error("Error reading directory:", err);
+    return;
+  }
+
+  files.forEach(function (csvfiles) {
+    const filePath = path.join(dataFolder, csvfiles);
+    fs.createReadStream(filePath)
+      .pipe(
+        csv({
+          headers: false, // csv no headers
+        })
+      )
+      .on("data", function (row) {
+        const timestamp = row[0];
+        const priceClose = row[4];
+        allData2024.push({
+          time: new Date(Number(timestamp)),
+          close: parseFloat(priceClose),
+        });
+        onlyPriceClose2024.push(parseFloat(priceClose));
+      })
+
+      .on("end", function () {
+        fileProcessed++;
+        if (fileProcessed === files.length) {
+          // Calculate current moving averages of year 2024
+          const ma52024 = calculateMovingAverage(onlyPriceClose2024, 5); // this is the 5 minutes
+          //const ma30204 = calculateMovingAverage(onlyPriceClose2024, 30); // this is the 30 minutes
+
+          // detect relevant movement of the ma5 over a window of 30 minutes in the year 2024
+          const threshold = 400; // $
+          const windowSize = 30; // candles so 30 minutes
+          const sigMovIdx = []; // array of those relevant idx
+
+          for (let i = 0; i < ma52024.length; i++) {
+            const start = ma52024[i];
+            const end = ma52024[i + windowSize - 1];
+            // Prevent out-of-bounds access
+            if (i + windowSize - 1 >= ma52024.length) break;
+            const diff = Math.abs(end - start);
+
+            if (diff >= threshold) {
+              const maWindow = ma52024.slice(i, i + windowSize);
+              const direction = getTrendDirection(maWindow);
+              sigMovIdx.push({ idx: i + windowSize - 1, direction });
+            }
+          }
+
+          // extract patterns of the 30 candles (minutes) of MA of the 5 candles over 30 minutes window BEFORE the relevant idx.
+
+          const preMovePattern = []; // array of arrays. each array is a pattern of the MA5 that had lead to difference of threshold (abs diff, so either bullish or bearish)
+
+          sigMovIdx.forEach(function (entry) {
+            const start = entry.idx - windowSize;
+            if (start >= 0) {
+              const pattern = ma52024.slice(start, entry.idx);
+              preMovePattern.push({
+                pattern,
+                index: start,
+                direction: entry.direction,
+              });
+            }
+          });
+
+          //  here i normalize the patterns
+          preMovePattern.forEach((p) => {
+            p.normalizedPattern = normalize(p.pattern); // add a new field
+          });
+
+          // here i normalised the entire ma52024 which i will need to use in order to output the 30 candles "future" of the most similar patter found
+          normalizedMA52024 = normalize(ma52024);
+
+          //Start the live refresh loop only after historical data is ready
+          setInterval(() => refresh(preMovePattern), 30 * 1000);
+
+          console.log(`All ${fileProcessed} files parsed!`);
+          console.log(`Total entries: ${allData2024.length}`);
+          // Example output
+          console.log(allData2024.slice(0, 5)); // Show first 5 entries
+          console.log(onlyPriceClose2024.slice(0, 100));
+
+          // check if function moving average works for 2024
+          console.log(ma52024.slice(0, 20));
+          //console.log(ma30204.slice(0, 60));
+
+          // check if sigMovIdx is working
+          console.log(
+            `Relevant index Detected ${sigMovIdx.length} significant moves.`
+          );
+
+          // check if the patter are extracted successfully
+          console.log(`Extracted ${preMovePattern.length} pre-move patterns.`);
+        }
+      });
+  });
+});
+
+// fetching current data from binance API, and then we parse it to JSON
+
+function refresh(preMovePattern) {
+  const url =
+    "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=50";
+
+  https.get(url, function (apiResponse) {
+    let data = "";
+
+    // we add event listener to receive chunks of data
+    apiResponse.on("data", function (chunk) {
+      data = data + chunk;
+    });
+    // once all data arrived, parse JSON string into a JSON object
+    apiResponse.on("end", function () {
+      const parsed = JSON.parse(data);
+      // create an array of arrays in js so we can create new object from it with date and close price
+      const candles = parsed.map(function (element) {
+        return {
+          time: new Date(element[0]),
+          closePrice: parseFloat(element[4]),
+        };
+      });
+      //console.log(candles);
+      console.log(`Total candles fetched: ${parsed.length}`);
+
+      const onlyClosePrices = candles.map(function (candle) {
+        return candle.closePrice;
+      });
+
+      //console.log(onlyClosePrices);
+
+      // Calculate current moving averages
+      const ma5 = calculateMovingAverage(onlyClosePrices, 5); // calculate  moving average price over 5 minutes
+      const ma30 = calculateMovingAverage(onlyClosePrices, 30); // calculate  moving average price over 30 minutes
+
+      // prevent normalised current ma5 to get bad data
+      if (ma5.filter((v) => v !== null).length < 30) {
+        console.warn("Not enough data to normalize live MA5.");
+        return;
+      }
+
+      // we cant take the null values cause will fuck up the normalization... after we can normalize
+      const recentMa5 = ma5.slice(-30);
+      if (recentMa5.includes(null)) {
+        console.warn("Not enough valid MA5 data for comparison.");
+        return;
+      }
+      const normalizedLivema5 = normalize(recentMa5);
+
+      console.log("Normalized live MA5:", normalizedLivema5);
+
+      // comparng the normalised historical ma5 with normalised current live data
+
+      const comparisonResults = preMovePattern.map((p) => {
+        const error = mse(normalizedLivema5, p.normalizedPattern);
+        return { ...p, mse: error };
+      });
+      const sorted = comparisonResults.sort((a, b) => a.mse - b.mse);
+      const mostSimilar = sorted[0];
+      const threshold = 0.045; // You can tweak this for sensitivity
+      const similarPatterns = sorted.filter((p) => p.mse < threshold);
+
+      // pulling the next 30 minutes from the historical from the normalised patterm and the current pattern
+      if (similarPatterns.length > 0 && mostSimilar) {
+        const startOfPattern = mostSimilar.index;
+        const patternLength = mostSimilar.pattern.length;
+
+        const endOfPattern = startOfPattern + patternLength;
+        const futureStart = endOfPattern;
+
+        let futurePattern = [];
+        if (futureStart + 30 <= normalizedMA52024.length) {
+          // This gives us the 30 minutes *after* the matched pattern
+          futurePattern = normalizedMA52024.slice(
+            futureStart,
+            futureStart + 30
+          );
+          mostSimilar.futurePattern = futurePattern;
+
+          // This gives us the matched pattern itself
+          const matchedPattern = normalizedMA52024.slice(
+            startOfPattern,
+            endOfPattern
+          );
+          mostSimilar.historicalPattern = matchedPattern;
+
+          console.log("Matched (normalized):", matchedPattern);
+          console.log("Future (normalized):", futurePattern);
+        } else {
+          console.warn(
+            "Not enough historical data to extract full future pattern."
+          );
+        }
+      }
+      // print the results to console
+
+      if (similarPatterns.length > 0 && mostSimilar) {
+        console.log(`Found ${similarPatterns.length} similar patterns.`);
+        console.log(`Most similar pattern direction: ${mostSimilar.direction}`);
+        console.log(`MSE: ${mostSimilar.mse}`);
+        console.log(
+          "Future (normalized) after similar pattern:",
+          mostSimilar.futurePattern
+        );
+      } else {
+        console.log(" Found 0 similar patterns.");
+      }
+
+      // creating JSON file of the most similar pattern so we can visualize data in HTML
+
+      if (
+        similarPatterns.length > 0 &&
+        mostSimilar &&
+        mostSimilar.futurePattern
+      ) {
+        const output = {
+          futurePattern: mostSimilar.futurePattern,
+          historicalPattern: mostSimilar.historicalPattern,
+          direction: mostSimilar.direction,
+          mse: mostSimilar.mse,
+          similarCount: similarPatterns.length,
+        };
+
+        fs.writeFileSync(
+          "public/mostSimilar.json",
+          JSON.stringify(output),
+          "utf8"
+        );
+        console.log("✅ mostSimilar.json written!");
+      } else {
+        console.log("No valid similar pattern found — skipping JSON export.");
+
+        const emptyOutput = {
+          futurePattern: [],
+          historicalPattern: [],
+          direction: null,
+          mse: null,
+          similarCount: 0,
+        };
+
+        fs.writeFileSync(
+          "public/mostSimilar.json",
+          JSON.stringify(emptyOutput, null, 2),
+          "utf8"
+        );
+      }
+
+      // checking diretion of trend ( going up??)
+      const lastIndex = onlyClosePrices.length - 1;
+
+      const ma5GoingUp = checkIdx(ma5, lastIndex);
+      const ma30GoingUp = checkIdx(ma30, lastIndex);
+
+      // decision making
+      let decision;
+
+      if (ma5GoingUp && ma30GoingUp) {
+        decision = "BUY";
+      } else if (!ma5GoingUp && !ma30GoingUp) {
+        decision = "SELL";
+      } else {
+        decision = "HOLD";
+      }
+
+      // checking if it is working
+
+      //console.log(`MA5 going up? ${ma5GoingUp}`);
+      //console.log(`MA30 going up? ${ma30GoingUp}`);
+      //console.log(`Decision: ${decision}`);
+
+      const priceDiff5 = calculateMaxMinDiff(onlyClosePrices, 5);
+      //const priceDiff30 = calculateMaxMinDiff(onlyClosePrices, 30);
+      //console.log(priceDiff5);
+      //console.log(priceDiff30);
+    });
+  });
+}
+
+
+================================== script js , front end ================================================== 
+
+
+
+window.addEventListener("load", loadMostSimilarPattern);
+
+async function loadMostSimilarPattern() {
+  const summaryEl = document.getElementById("patternSummary");
+  const canvas = document.getElementById("patternCanvas");
+  const ctx = canvas.getContext("2d");
+
+  try {
+    const res = await fetch("mostSimilar.json");
+
+    if (!res.ok) {
+      throw new Error("mostSimilar.json not found");
+    }
+
+    const data = await res.json();
+    const {
+      futurePattern,
+      historicalPattern = [],
+      direction,
+      mse,
+      similarCount,
+    } = data;
+
+    const pattern = [...historicalPattern, ...futurePattern];
+
+    // ⛔ Check if no valid data
+    if (
+      !Array.isArray(futurePattern) ||
+      futurePattern.length === 0 ||
+      !direction ||
+      similarCount === 0
+    ) {
+      summaryEl.innerHTML = "⚠️ No valid similar pattern found.";
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
+
+    // ✅ Draw chart
+    const width = canvas.width;
+    const height = canvas.height;
+
+    const min = Math.min(...pattern);
+    const max = Math.max(...pattern);
+    const range = max - min || 1;
+
+    const totalLength = pattern.length;
+    const xStep = width / (totalLength - 1);
+
+    ctx.clearRect(0, 0, width, height);
+    ctx.beginPath();
+
+    pattern.forEach((value, index) => {
+      const x = index * xStep;
+      const y = height - ((value - min) / range) * height;
+      if (index === 0) {
+        ctx.moveTo(x, y);
+      } else {
+        ctx.lineTo(x, y);
+      }
+    });
+
+    ctx.strokeStyle = direction === "bullish" ? "green" : "red";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Draw separator line between historical and future
+    const sepX = historicalPattern.length * xStep;
+    ctx.beginPath();
+    ctx.moveTo(sepX, 0);
+    ctx.lineTo(sepX, height);
+    ctx.strokeStyle = "#ffffff";
+    ctx.setLineDash([5, 5]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Summary text
+    ctx.fillStyle = "#000";
+    ctx.font = "16px Arial";
+    ctx.fillText(`Direction: ${direction}`, 10, 20);
+    ctx.fillText(`MSE: ${mse.toFixed(5)}`, 10, 40);
+
+    summaryEl.innerHTML = `
+      Found ${similarCount} similar pattern${similarCount > 1 ? "s" : ""}.<br>
+      Most similar pattern direction: <strong>${direction}</strong><br>
+      MSE: <strong>${mse.toFixed(8)}</strong>
+    `;
+  } catch (err) {
+    console.error("❌ Failed to load or parse mostSimilar.json", err);
+    summaryEl.innerHTML = "⚠️ Error loading pattern data.";
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }
+}
+
+// auto refresh
+setInterval(loadMostSimilarPattern, 30000);
+
+function clearPatternCanvas() {
+  const canvas = document.getElementById("patternCanvas");
+  if (!canvas) return;
+
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+//============================================================
+
+function drawPatternChart(pattern, direction, mse) {
+  const canvas = document.getElementById("patternCanvas");
+  const ctx = canvas.getContext("2d");
+
+  const width = canvas.width;
+  const height = canvas.height;
+
+  const min = Math.min(...pattern);
+  const max = Math.max(...pattern);
+  const range = max - min || 1;
+
+  const xStep = width / (pattern.length - 1);
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.beginPath();
+  pattern.forEach((value, index) => {
+    const x = index * xStep;
+    const y = height - ((value - min) / range) * height;
+    if (index === 0) {
+      ctx.moveTo(x, y);
+    } else {
+      ctx.lineTo(x, y);
+    }
+  });
+
+  ctx.strokeStyle = direction === "bullish" ? "green" : "red";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Label
+  ctx.fillStyle = "#000";
+  ctx.font = "16px Arial";
+  ctx.fillText(`Direction: ${direction}`, 10, 20);
+  ctx.fillText(`MSE: ${mse.toFixed(5)}`, 10, 40);
+}
+
+
+
+============================================================== html ==========================================================
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BTC/USD Dashboard</title>
+
+    <link rel="stylesheet" href="btc_dashboard_style.css" />
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  </head>
+  <body>
+    <h1>BTC/USD Live Dashboard (MA crossing)</h1>
+
+    <canvas id="btcChart" width="1400" height="500"></canvas>
+
+    <div id="decision">Loading...</div>
+
+    <div id="MostSimilarPattern" style="margin-top: 80px">
+      <h2>Most Similar Pattern Visualization (Period: 5)</h2>
+      <canvas id="SimilarPattern" width="1400" height="300"> </canvas>
+      <div
+        id="patternSummary"
+        style="color: #ccc; font-size: 16px; margin-top: 10px"
+      ></div>
+    </div>
+
+    <div id="diffChartContainer" style="margin-top: 40px">
+      <h2>Max-Min Difference (Period: 5)</h2>
+      <canvas id="diffChart" width="1400" height="300"></canvas>
+    </div>
+
+    <script>
+      let diffChart;
+      let patternChart;
+
+      // Moving average function
+
+      function calculateMovingAverage(data, period) {
+        let movingAverage = [];
+        for (let i = 0; i < data.length; i++) {
+          if (i >= period - 1) {
+            let sum = 0;
+            for (let j = i - period + 1; j <= i; j++) {
+              sum += data[j];
+            }
+            movingAverage.push(sum / period);
+          } else {
+            movingAverage.push(null);
+          }
+        }
+        return movingAverage;
+      }
+
+      // Max-min difference for volatility
+      function calculateMaxMinDiff(data, period) {
+        let maxMin = [];
+        for (let i = 0; i < data.length; i++) {
+          if (i >= period - 1) {
+            let min = Infinity;
+            let max = -Infinity;
+            for (let j = i - period + 1; j <= i; j++) {
+              if (data[j] < min) min = data[j];
+              if (data[j] > max) max = data[j];
+            }
+            maxMin.push(max - min);
+          } else {
+            maxMin.push(null);
+          }
+        }
+        return maxMin;
+      }
+
+      // Check if current index value is greater than previous index value
+      function checkIdx(arr, idx) {
+        if (idx <= 0 || arr[idx] === null || arr[idx - 1] === null)
+          return false;
+        return arr[idx] > arr[idx - 1];
+      }
+
+      const ctx = document.getElementById("btcChart").getContext("2d");
+      let chart;
+
+      async function loadData() {
+        const res = await fetch(
+          "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=50"
+        );
+        const data = await res.json();
+
+        const times = data.map((c) => new Date(c[0]).toLocaleTimeString());
+        const onlyClosePrices = data.map((c) => parseFloat(c[4]));
+
+        const ma5 = calculateMovingAverage(onlyClosePrices, 5);
+        const ma30 = calculateMovingAverage(onlyClosePrices, 30);
+        const diff5 = calculateMaxMinDiff(onlyClosePrices, 5);
+        // remove "null values, to avoid issue in chart"
+        const diff5clean = diff5.map(function (el) {
+          if (el === null) {
+            return 0;
+          } else {
+            return el;
+          }
+        });
+
+        const lastIndex = onlyClosePrices.length - 1;
+        const ma5GoingUp = checkIdx(ma5, lastIndex);
+        const ma30GoingUp = checkIdx(ma30, lastIndex);
+
+        let decision;
+        if (ma5GoingUp && ma30GoingUp) decision = "BUY";
+        else if (!ma5GoingUp && !ma30GoingUp) decision = "SELL";
+        else decision = "HOLD";
+
+        document.getElementById("decision").innerText = `Decision: ${decision}`;
+
+        const datasets = [
+          {
+            label: "Close Price",
+            data: onlyClosePrices,
+            borderColor: "yellow",
+            borderWidth: 2,
+            pointRadius: 0,
+            fill: false,
+          },
+          {
+            label: "MA 5",
+            data: ma5,
+            borderColor: "cyan",
+            borderWidth: 2,
+            pointRadius: 0,
+            fill: false,
+          },
+          {
+            label: "MA 30",
+            data: ma30,
+            borderColor: "magenta",
+            borderWidth: 2,
+            pointRadius: 0,
+            fill: false,
+          },
+        ];
+
+        if (chart) {
+          chart.destroy(); // destroy previous chart
+        }
+        chart = new Chart(ctx, {
+          type: "line",
+          data: {
+            labels: times,
+            datasets: datasets,
+          },
+          options: {
+            responsive: false,
+            interaction: {
+              mode: "index",
+              intersect: false,
+            },
+            scales: {
+              x: { ticks: { color: "#aaa" } },
+              y: { ticks: { color: "#aaa" } },
+            },
+            plugins: {
+              legend: { labels: { color: "#eee" } },
+            },
+          },
+        });
+
+        // third  chart for max-min difference
+        const diffCtx = document.getElementById("diffChart").getContext("2d");
+
+        if (diffChart) {
+          diffChart.destroy(); // destroy old chart instance
+        }
+
+        diffChart = new Chart(diffCtx, {
+          type: "bar",
+          data: {
+            labels: times,
+            datasets: [
+              {
+                label: "Max-Min absolute Diff (Period 5)",
+                data: diff5clean,
+                backgroundColor: "orange",
+              },
+            ],
+          },
+          options: {
+            responsive: false,
+            scales: {
+              x: { ticks: { color: "#aaa" } },
+              y: { ticks: { color: "#aaa" } },
+            },
+            plugins: {
+              legend: { labels: { color: "#eee" } },
+            },
+          },
+        });
+      }
+
+      loadData();
+      setInterval(loadData, 30000);
+
+      // similar pattern visualization
+
+      async function loadMostSimilarPattern() {
+        const summaryEl = document.getElementById("patternSummary");
+        try {
+          const res = await fetch("mostSimilar.json");
+          if (!res.ok) {
+            console.warn("mostSimilar.json not found:", res.status);
+            summaryEl.innerHTML = "No valid similar pattern found.";
+            if (patternChart) {
+              patternChart.destroy();
+              patternChart = null;
+            }
+            return;
+          }
+
+          const data = await res.json();
+
+          const {
+            futurePattern,
+            historicalPattern,
+            direction,
+            mse,
+            similarCount,
+          } = data;
+
+          if (
+            !Array.isArray(futurePattern) ||
+            futurePattern.length === 0 ||
+            similarCount === 0
+          ) {
+            summaryEl.innerHTML = "No valid similar pattern found.";
+
+            // Clear old chart if needed
+            if (patternChart) {
+              patternChart.destroy();
+              patternChart = null;
+            }
+
+            return;
+          }
+
+          // elimate previous pattern to avoid drawing over existing charts (we want new chart which is drawn every refresh)
+          if (patternChart) {
+            patternChart.destroy();
+          }
+
+          // clean canvas
+
+          const patternCanvas = document.getElementById("SimilarPattern");
+          const patternCtx = patternCanvas.getContext("2d");
+
+          //  Now we can safely clear
+          patternCtx.clearRect(0, 0, patternCanvas.width, patternCanvas.height);
+
+          // Combine historical + future data
+          const fullPattern = [...(historicalPattern || []), ...futurePattern];
+
+          // Generate labels like -30m to +30m
+          const labels = fullPattern.map((_, i) => {
+            if (i < historicalPattern.length)
+              return `-${historicalPattern.length - i}m`;
+            return `+${i - historicalPattern.length + 1}m`;
+          });
+          console.log("Historical pattern data:", historicalPattern);
+
+          patternChart = new Chart(patternCtx, {
+            type: "line",
+            data: {
+              labels,
+              datasets: [
+                {
+                  label: `Pattern | MSE: ${mse.toFixed(4)}`,
+                  data: fullPattern,
+                  borderWidth: 2,
+                  fill: false,
+                  pointRadius: 0,
+                  borderColor: "blue", // fallback, segment overrides this
+                  segment: {
+                    borderColor: (ctx) =>
+                      ctx.p0DataIndex < historicalPattern.length
+                        ? "blue"
+                        : direction === "bullish"
+                        ? "green"
+                        : "red",
+                  },
+                },
+              ],
+            },
+            options: {
+              responsive: false,
+              scales: {
+                x: { ticks: { color: "#aaa" } },
+                y: { ticks: { color: "#aaa" } },
+              },
+              plugins: {
+                legend: { labels: { color: "#eee" } },
+              },
+            },
+          });
+
+          // Update pattern summary
+          summaryEl.innerHTML = `
+  Found ${similarCount ?? "?"} similar patterns.<br>
+  Most similar pattern direction: <strong>${direction}</strong><br>
+  MSE: <strong>${mse.toFixed(8)}</strong>
+`;
+        } catch (error) {
+          console.error("Failed to load mostSimilar.json", error);
+          summaryEl.innerHTML = "Error loading pattern data.";
+
+          if (patternChart) {
+            patternChart.destroy();
+            patternChart = null;
+          }
+        }
+      }
+      loadMostSimilarPattern();
+      setInterval(loadMostSimilarPattern, 30000);
+    </script>
+  </body>
+</html>
+
+
+
+================================== style css ============================================ 
+
+body {
+  font-family: "Segoe UI", sans-serif;
+  background: #0f0f0f;
+  color: #e0e0e0;
+  padding: 20px;
+}
+
+h1 {
+  color: #f0da12;
+  margin-bottom: 10px;
+}
+
+#btcChart {
+  background: #1b1b1b;
+  border-radius: 12px;
+  box-shadow: 0 0 12px rgba(235, 4, 177, 0.3);
+  padding: 15px;
+}
+
+#decision {
+  font-size: 22px;
+  margin-top: 15px;
+  padding: 10px;
+  border-left: 4px solid #eec615;
+  background: #1a1a1a;
+  width: fit-content;
+}
+
+button {
+  background-color: #ffc400;
+  border: none;
+  color: #000;
+  padding: 10px 20px;
+  font-size: 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  margin-bottom: 20px;
+}
+
+button:hover {
+  background-color: #f89008;
+}
+
+#diffChart {
+  background: #1b1b1b;
+  border-radius: 12px;
+  box-shadow: 0 0 12px rgba(255, 165, 0, 0.3);
+  padding: 15px;
+  display: block;
+}

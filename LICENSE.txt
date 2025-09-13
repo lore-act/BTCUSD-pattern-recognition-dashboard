@@ -1,0 +1,29 @@
+Business Source License 1.1 (BSL 1.1)
+© 2025 Lorenzo Grumetti
+
+1. Definitions
+   "Software" means the BTCUSD pattern recognition tool, including all source code, frontend, backend, CSV data handling, and CSS.
+   "Change Date" means 10 years from the date of first public release of this Software.
+   "Commercial Use" means using the Software for direct or indirect monetary gain.
+
+2. License Grant
+   The Licensor grants you a non-exclusive license to use, modify, and copy the Software for personal, non-commercial purposes.
+
+3. Restrictions
+   You may not use the Software for Commercial Use before the Change Date without obtaining a separate commercial license from the Licensor.
+   You may not sublicense, distribute, or make the Software available to third parties for Commercial Use before the Change Date.
+
+4. Change Date
+   On the Change Date, this Software will automatically be available under the Apache License 2.0.
+
+5. No Warranty
+   The Software is provided "as-is," without warranties of any kind, either express or implied. The Licensor is not liable for any damages arising from its use.
+
+6. Governing Law
+   This license is governed by the laws of the country of the Licensor’s residence (Sweden).
+
+7. Attribution
+   Any use of the Software must retain this license notice and attribution to Lorenzo.
+
+---
+

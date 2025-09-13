@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BTC/USD Dashboard</title>
+
+    <link rel="stylesheet" href="btc_dashboard_style.css" />
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  </head>
+  <body>
+    <h1>BTC/USD Live Dashboard (MA crossing)</h1>
+
+    <canvas id="btcChart" width="1400" height="500"></canvas>
+
+    <div id="decision">Loading...</div>
+
+    <div id="MostSimilarPattern" style="margin-top: 80px">
+      <h2>Most Similar Pattern Visualization (Period: 5)</h2>
+      <canvas id="SimilarPattern" width="1400" height="300"> </canvas>
+      <div
+        id="patternSummary"
+        style="color: #ccc; font-size: 16px; margin-top: 10px"
+      ></div>
+      <div id="zoneLabel" style="font-size: 1.2rem; margin-top: 20px; font-weight: bold;">
+  Loading pattern classification...
+    </div>
+
+    <div id="diffChartContainer" style="margin-top: 40px">
+      <h2>Max-Min Difference (Period: 5)</h2>
+      <canvas id="diffChart" width="1400" height="300"></canvas>
+    </div>
+
+    <script>
+      let diffChart;
+      let patternChart;
+
+      // Moving average function
+
+      function calculateMovingAverage(data, period) {
+        let movingAverage = [];
+        for (let i = 0; i < data.length; i++) {
+          if (i >= period - 1) {
+            let sum = 0;
+            for (let j = i - period + 1; j <= i; j++) {
+              sum += data[j];
+            }
+            movingAverage.push(sum / period);
+          } else {
+            movingAverage.push(null);
+          }
+        }
+        return movingAverage;
+      }
+
+      // Max-min difference for volatility
+      function calculateMaxMinDiff(data, period) {
+        let maxMin = [];
+        for (let i = 0; i < data.length; i++) {
+          if (i >= period - 1) {
+            let min = Infinity;
+            let max = -Infinity;
+            for (let j = i - period + 1; j <= i; j++) {
+              if (data[j] < min) min = data[j];
+              if (data[j] > max) max = data[j];
+            }
+            maxMin.push(max - min);
+          } else {
+            maxMin.push(null);
+          }
+        }
+        return maxMin;
+      }
+
+      // Check if current index value is greater than previous index value
+      function checkIdx(arr, idx) {
+        if (idx <= 0 || arr[idx] === null || arr[idx - 1] === null)
+          return false;
+        return arr[idx] > arr[idx - 1];
+      }
+
+      const ctx = document.getElementById("btcChart").getContext("2d");
+      let chart;
+
+      async function loadData() {
+        const res = await fetch(
+          "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=50"
+        );
+        const data = await res.json();
+
+        const times = data.map((c) => new Date(c[0]).toLocaleTimeString());
+        const onlyClosePrices = data.map((c) => parseFloat(c[4]));
+
+        const ma5 = calculateMovingAverage(onlyClosePrices, 5);
+        const ma30 = calculateMovingAverage(onlyClosePrices, 30);
+        const diff5 = calculateMaxMinDiff(onlyClosePrices, 5);
+        // remove "null values, to avoid issue in chart"
+        const diff5clean = diff5.map(function (el) {
+          if (el === null) {
+            return 0;
+          } else {
+            return el;
+          }
+        });
+
+        const lastIndex = onlyClosePrices.length - 1;
+        const ma5GoingUp = checkIdx(ma5, lastIndex);
+        const ma30GoingUp = checkIdx(ma30, lastIndex);
+
+        let decision;
+        if (ma5GoingUp && ma30GoingUp) decision = "BUY";
+        else if (!ma5GoingUp && !ma30GoingUp) decision = "SELL";
+        else decision = "HOLD";
+
+        document.getElementById("decision").innerText = `Decision: ${decision}`;
+
+        const datasets = [
+          {
+            label: "Close Price",
+            data: onlyClosePrices,
+            borderColor: "yellow",
+            borderWidth: 2,
+            pointRadius: 0,
+            fill: false,
+          },
+          {
+            label: "MA 5",
+            data: ma5,
+            borderColor: "cyan",
+            borderWidth: 2,
+            pointRadius: 0,
+            fill: false,
+          },
+          {
+            label: "MA 30",
+            data: ma30,
+            borderColor: "magenta",
+            borderWidth: 2,
+            pointRadius: 0,
+            fill: false,
+          },
+        ];
+
+        if (chart) {
+          chart.destroy(); // destroy previous chart
+        }
+        chart = new Chart(ctx, {
+          type: "line",
+          data: {
+            labels: times,
+            datasets: datasets,
+          },
+          options: {
+            responsive: false,
+            interaction: {
+              mode: "index",
+              intersect: false,
+            },
+            scales: {
+              x: { ticks: { color: "#aaa" } },
+              y: { ticks: { color: "#aaa" } },
+            },
+            plugins: {
+              legend: { labels: { color: "#eee" } },
+            },
+          },
+        });
+
+        // third  chart for max-min difference
+        const diffCtx = document.getElementById("diffChart").getContext("2d");
+
+        if (diffChart) {
+          diffChart.destroy(); // destroy old chart instance
+        }
+
+        diffChart = new Chart(diffCtx, {
+          type: "bar",
+          data: {
+            labels: times,
+            datasets: [
+              {
+                label: "Max-Min absolute Diff (Period 5)",
+                data: diff5clean,
+                backgroundColor: "orange",
+              },
+            ],
+          },
+          options: {
+            responsive: false,
+            scales: {
+              x: { ticks: { color: "#aaa" } },
+              y: { ticks: { color: "#aaa" } },
+            },
+            plugins: {
+              legend: { labels: { color: "#eee" } },
+            },
+          },
+        });
+      }
+
+      loadData();
+      setInterval(loadData, 30000);
+
+      // similar pattern visualization
+
+      async function loadMostSimilarPattern() {
+  const summaryEl = document.getElementById("patternSummary");
+  try {
+    const res = await fetch("mostSimilar.json");
+    if (!res.ok) {
+      console.warn("mostSimilar.json not found:", res.status);
+      summaryEl.innerHTML = "No valid similar pattern found.";
+      if (patternChart) {
+        patternChart.destroy();
+        patternChart = null;
+      }
+      // Also clear zoneLabel if data missing
+      const zoneEl = document.getElementById("zoneLabel");
+      zoneEl.textContent = "No pattern zone classification available.";
+      zoneEl.style.color = "inherit";
+      return;
+    }
+
+    const data = await res.json();
+
+    const {
+      futurePattern,
+      historicalPattern = [],
+      direction,
+      mse,
+      similarCount,
+      patternStartPrice,
+      patternEndPrice,
+      dayLow,
+      dayHigh,
+    } = data;
+
+    if (
+      !Array.isArray(futurePattern) ||
+      futurePattern.length === 0 ||
+      similarCount === 0
+    ) {
+      summaryEl.innerHTML = "No valid similar pattern found.";
+
+      if (patternChart) {
+        patternChart.destroy();
+        patternChart = null;
+      }
+
+      const zoneEl = document.getElementById("zoneLabel");
+      zoneEl.textContent = "No pattern zone classification available.";
+      zoneEl.style.color = "inherit";
+      return;
+    }
+
+    if (patternChart) {
+      patternChart.destroy();
+    }
+
+    const patternCanvas = document.getElementById("SimilarPattern");
+    const patternCtx = patternCanvas.getContext("2d");
+
+    patternCtx.clearRect(0, 0, patternCanvas.width, patternCanvas.height);
+
+    const fullPattern = [...historicalPattern, ...futurePattern];
+
+    const labels = fullPattern.map((_, i) => {
+      if (i < historicalPattern.length)
+        return `-${historicalPattern.length - i}m`;
+      return `+${i - historicalPattern.length + 1}m`;
+    });
+
+    patternChart = new Chart(patternCtx, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [
+          {
+            label: `Pattern | MSE: ${mse.toFixed(4)}`,
+            data: fullPattern,
+            borderWidth: 2,
+            fill: false,
+            pointRadius: 0,
+            borderColor: "blue",
+            segment: {
+              borderColor: (ctx) =>
+                ctx.p0DataIndex < historicalPattern.length
+                  ? "blue"
+                  : direction === "bullish"
+                  ? "green"
+                  : "red",
+            },
+          },
+        ],
+      },
+      options: {
+        responsive: false,
+        scales: {
+          x: { ticks: { color: "#aaa" } },
+          y: { ticks: { color: "#aaa" } },
+        },
+        plugins: {
+          legend: { labels: { color: "#eee" } },
+        },
+      },
+    });
+
+    // Summary text
+    summaryEl.innerHTML = `
+      Found ${similarCount ?? "?"} similar patterns.<br>
+      Most similar pattern direction: <strong>${direction}</strong><br>
+      MSE: <strong>${mse.toFixed(8)}</strong><br>
+      (Start: ${patternStartPrice}, End: ${patternEndPrice}, Low: ${dayLow}, High: ${dayHigh})
+    `;
+
+    // Calculate zone classification
+    const rangeDay = dayHigh - dayLow || 1;
+    const normalizedStart = ((patternStartPrice - dayLow) / rangeDay) * 100;
+    const normalizedEnd = ((patternEndPrice - dayLow) / rangeDay) * 100;
+
+    let zone;
+    if (normalizedStart < 33 && normalizedEnd < 33) {
+      zone = "Support";
+    } else if (normalizedStart > 66 && normalizedEnd > 66) {
+      zone = "Resistance";
+    } else {
+      zone = "Neutral";
+    }
+
+    // Update zoneLabel element
+    const zoneEl = document.getElementById("zoneLabel");
+    zoneEl.textContent = `Most similar pattern is in the ${zone} zone.`;
+
+    switch (zone) {
+      case "Support":
+        zoneEl.style.color = "green";
+        break;
+      case "Resistance":
+        zoneEl.style.color = "red";
+        break;
+      default:
+        zoneEl.style.color = "orange";
+    }
+  } catch (error) {
+    console.error("Failed to load mostSimilar.json", error);
+    const summaryEl = document.getElementById("patternSummary");
+    summaryEl.innerHTML = "Error loading pattern data.";
+
+    if (patternChart) {
+      patternChart.destroy();
+      patternChart = null;
+    }
+
+    const zoneEl = document.getElementById("zoneLabel");
+    zoneEl.textContent = "Error loading pattern zone classification.";
+    zoneEl.style.color = "inherit";
+  }
+}
+
+      loadMostSimilarPattern();
+      setInterval(loadMostSimilarPattern, 30000);
+    </script>
+  </body>
+</html>
