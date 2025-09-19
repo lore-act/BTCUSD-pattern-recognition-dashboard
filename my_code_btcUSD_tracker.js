@@ -225,30 +225,37 @@ function refresh(preMovePattern) {
     apiResponse.on("end", function () {
       const parsed = JSON.parse(data);
 
-      // Map to candle objects
-      const candles = parsed.map((element) => ({
-        time: new Date(element[0]),
-        closePrice: parseFloat(element[4]),
+      const candles = parsed.map((el) => ({
+        time: new Date(el[0]),
+        closePrice: parseFloat(el[4]),
       }));
-
-      console.log(`Total candles fetched: ${parsed.length}`);
 
       const onlyClosePrices = candles.map((c) => c.closePrice);
 
-      // Calculate moving averages
       const ma5 = calculateMovingAverage(onlyClosePrices, 5);
       const ma30 = calculateMovingAverage(onlyClosePrices, 30);
 
-      // Check if enough data to normalize MA5
+      // Determine live trend from latest MA5 & MA30
+      const lastIndex = onlyClosePrices.length - 1;
+      const ma5GoingUp = checkIdx(ma5, lastIndex);
+      const ma30GoingUp = checkIdx(ma30, lastIndex);
+
+      const liveTrend =
+        ma5GoingUp && ma30GoingUp
+          ? "bullish"
+          : !ma5GoingUp && !ma30GoingUp
+          ? "bearish"
+          : "neutral";
+
+      // Normalize last 30 MA5 for pattern comparison
       const recentMa5 = ma5.slice(-30);
       if (recentMa5.includes(null)) {
         console.warn("Not enough valid MA5 data for comparison.");
         return;
       }
       const normalizedLivema5 = normalize(recentMa5);
-      console.log("Normalized live MA5:", normalizedLivema5);
 
-      // Compare normalized historical patterns with live MA5
+      // Compare with historical patterns
       const comparisonResults = preMovePattern.map((p) => ({
         ...p,
         mse: mse(normalizedLivema5, p.normalizedPattern),
@@ -256,14 +263,13 @@ function refresh(preMovePattern) {
 
       const sorted = comparisonResults.sort((a, b) => a.mse - b.mse);
       const mostSimilar = sorted[0];
-      const threshold = 0.045;
+      const threshold = 0.05;
       const similarPatterns = sorted.filter((p) => p.mse < threshold);
 
-      // Extract future pattern from historical MA
+      // Extract future pattern
       if (similarPatterns.length > 0 && mostSimilar) {
         const startOfPattern = mostSimilar.index;
-        const patternLength = mostSimilar.pattern.length;
-        const endOfPattern = startOfPattern + patternLength;
+        const endOfPattern = startOfPattern + mostSimilar.pattern.length;
         const futureStart = endOfPattern;
 
         if (futureStart + 30 <= normalizedMA52024.length) {
@@ -275,25 +281,28 @@ function refresh(preMovePattern) {
             startOfPattern,
             endOfPattern
           );
-          console.log("Matched (normalized):", mostSimilar.historicalPattern);
-          console.log("Future (normalized):", mostSimilar.futurePattern);
-        } else {
-          console.warn(
-            "Not enough historical data to extract full future pattern."
-          );
         }
       }
 
-      // Log similar patterns info
-      if (similarPatterns.length > 0 && mostSimilar) {
-        console.log(`Found ${similarPatterns.length} similar patterns.`);
-        console.log(`Most similar pattern direction: ${mostSimilar.direction}`);
-        console.log(`MSE: ${mostSimilar.mse}`);
-      } else {
-        console.log("Found 0 similar patterns.");
+      // Determine predicted trend
+      let predictedTrend = "pattern not found";
+      if (
+        mostSimilar &&
+        Array.isArray(mostSimilar.futurePattern) &&
+        mostSimilar.futurePattern.length > 0
+      ) {
+        predictedTrend = getTrendDirection(mostSimilar.futurePattern);
       }
 
-      // Create JSON output including decision
+      // Make decision
+      let decision = "HOLD";
+      if (liveTrend === "bullish" && predictedTrend === "bullish") {
+        decision = "BUY";
+      } else if (liveTrend === "bearish" && predictedTrend === "bearish") {
+        decision = "SELL";
+      }
+
+      // Output JSON
       const output = {
         futurePattern:
           mostSimilar && mostSimilar.futurePattern
@@ -306,52 +315,21 @@ function refresh(preMovePattern) {
         direction: mostSimilar ? mostSimilar.direction : null,
         mse: mostSimilar ? mostSimilar.mse : null,
         similarCount: similarPatterns.length,
+        liveTrend,
+        predictedTrend,
+        decision,
       };
 
-      // Determine live trend
-      const lastIndex = onlyClosePrices.length - 1;
-      const ma5GoingUp = checkIdx(ma5, lastIndex);
-      const ma30GoingUp = checkIdx(ma30, lastIndex);
-
-      const liveTrend =
-        ma5GoingUp && ma30GoingUp
-          ? "bullish"
-          : !ma5GoingUp && !ma30GoingUp
-          ? "bearish"
-          : "neutral";
-
-      // Determine predicted trend from future pattern
-      let predictedTrend = null;
-      if (mostSimilar && mostSimilar.futurePattern) {
-        predictedTrend = getTrendDirection(mostSimilar.futurePattern);
-      }
-
-      // Make decision based on live and predicted trends
-      let decision = "HOLD";
-      if (liveTrend === "bullish" && predictedTrend === "bullish") {
-        decision = "BUY";
-      } else if (liveTrend === "bearish" && predictedTrend === "bearish") {
-        decision = "SELL";
-      }
-
-      // Add trends and decision to JSON output
-      output.liveTrend = liveTrend;
-      output.predictedTrend = predictedTrend;
-      output.decision = decision;
-
-      // Write JSON file
       fs.writeFileSync(
         "public/mostSimilar.json",
         JSON.stringify(output, null, 2),
         "utf8"
       );
-      console.log("✅ mostSimilar.json written with decision!");
-      console.log("Live Trend:", liveTrend);
-      console.log("Predicted Trend:", predictedTrend);
-      console.log("Decision:", decision);
 
-      // Optional: additional info
-      const priceDiff5 = calculateMaxMinDiff(onlyClosePrices, 5);
+      console.log("mostSimilar.json written with decision!");
+      console.log(
+        `Live Trend: ${liveTrend}, Predicted Trend: ${predictedTrend}, Decision: ${decision}`
+      );
     });
   });
 }
