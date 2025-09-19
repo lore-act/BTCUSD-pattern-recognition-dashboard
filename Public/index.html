@@ -102,7 +102,7 @@
         }
 
         if (patternData && patternData.futurePattern?.length > 0) {
-          predictedTrend = patternData.direction || "pattern not found";
+          predictedTrend = patternData.predictedTrend || "pattern not found";
           if (liveTrend === "bullish" && predictedTrend === "bullish")
             decision = "BUY";
           else if (liveTrend === "bearish" && predictedTrend === "bearish")
