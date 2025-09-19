@@ -64,24 +64,24 @@
         return arr[idx] > arr[idx - 1];
       }
 
-      async function loadData() {
+      async function updateDashboard() {
+        const decisionEl = document.getElementById("decision");
+        const summaryEl = document.getElementById("patternSummary");
+
+        // Fetch live Binance data
         const res = await fetch(
           "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=50"
         );
         const data = await res.json();
-
         const times = data.map((c) => new Date(c[0]).toLocaleTimeString());
         const onlyClosePrices = data.map((c) => parseFloat(c[4]));
-
         const ma5 = calculateMovingAverage(onlyClosePrices, 5);
         const ma30 = calculateMovingAverage(onlyClosePrices, 30);
         const diff5 = calculateMaxMinDiff(onlyClosePrices, 5);
 
-        // Last index for trend
         const lastIndex = onlyClosePrices.length - 1;
         const ma5GoingUp = checkIdx(ma5, lastIndex);
         const ma30GoingUp = checkIdx(ma30, lastIndex);
-
         const liveTrend =
           ma5GoingUp && ma30GoingUp
             ? "bullish"
@@ -89,34 +89,30 @@
             ? "bearish"
             : "neutral";
 
-        // Fetch mostSimilar.json to get predicted trend
+        // Fetch pattern JSON once
         let predictedTrend = "pattern not found";
         let decision = "HOLD";
+        let patternData = null;
 
         try {
           const resPattern = await fetch("mostSimilar.json");
-          if (resPattern.ok) {
-            const patternData = await resPattern.json();
-            if (
-              patternData.futurePattern &&
-              patternData.futurePattern.length > 0
-            ) {
-              predictedTrend = patternData.direction || "pattern not found";
-              if (liveTrend === "bullish" && predictedTrend === "bullish")
-                decision = "BUY";
-              else if (liveTrend === "bearish" && predictedTrend === "bearish")
-                decision = "SELL";
-            }
-          }
+          if (resPattern.ok) patternData = await resPattern.json();
         } catch (err) {
           console.warn("Failed to load mostSimilar.json:", err);
         }
 
-        document.getElementById(
-          "decision"
-        ).innerText = `Decision: ${decision} | Live: ${liveTrend}, Predicted: ${predictedTrend}`;
+        if (patternData && patternData.futurePattern?.length > 0) {
+          predictedTrend = patternData.direction || "pattern not found";
+          if (liveTrend === "bullish" && predictedTrend === "bullish")
+            decision = "BUY";
+          else if (liveTrend === "bearish" && predictedTrend === "bearish")
+            decision = "SELL";
+        }
 
-        // BTC Chart
+        // Update decision display
+        decisionEl.innerText = `Decision: ${decision} | Live: ${liveTrend}, Predicted: ${predictedTrend}`;
+
+        // Update BTC Chart
         const datasets = [
           {
             label: "Close Price",
@@ -143,7 +139,6 @@
             fill: false,
           },
         ];
-
         const ctx = document.getElementById("btcChart").getContext("2d");
         if (chart) chart.destroy();
         chart = new Chart(ctx, {
@@ -160,7 +155,7 @@
           },
         });
 
-        // Max-Min Diff Chart
+        // Update Max-Min Diff Chart
         const diffClean = diff5.map((v) => (v === null ? 0 : v));
         const diffCtx = document.getElementById("diffChart").getContext("2d");
         if (diffChart) diffChart.destroy();
@@ -185,60 +180,40 @@
             plugins: { legend: { labels: { color: "#eee" } } },
           },
         });
-      }
 
-      loadData();
-      setInterval(loadData, 30000);
-
-      async function loadMostSimilarPattern() {
-        const summaryEl = document.getElementById("patternSummary");
-        try {
-          const res = await fetch("mostSimilar.json");
-          if (!res.ok) {
-            summaryEl.innerHTML = "No valid similar pattern found.";
-            if (patternChart) {
-              patternChart.destroy();
-              patternChart = null;
-            }
-            return;
+        // Update Most Similar Pattern Visualization
+        if (
+          !patternData ||
+          !Array.isArray(patternData.futurePattern) ||
+          patternData.similarCount === 0
+        ) {
+          summaryEl.innerHTML = "No valid similar pattern found.";
+          if (patternChart) {
+            patternChart.destroy();
+            patternChart = null;
           }
-
-          const data = await res.json();
+        } else {
           const {
             futurePattern,
             historicalPattern,
             direction,
             mse,
             similarCount,
-            predictedTrend,
-          } = data;
-
-          if (
-            !Array.isArray(futurePattern) ||
-            futurePattern.length === 0 ||
-            similarCount === 0
-          ) {
-            summaryEl.innerHTML = "No valid similar pattern found.";
-            if (patternChart) {
-              patternChart.destroy();
-              patternChart = null;
-            }
-            return;
-          }
+          } = patternData;
+          summaryEl.innerHTML = `Found ${similarCount} similar patterns.<br>Most similar pattern direction: <strong>${predictedTrend}</strong><br>MSE: <strong>${mse.toFixed(
+            8
+          )}</strong>`;
 
           if (patternChart) patternChart.destroy();
-
           const patternCanvas = document.getElementById("SimilarPattern");
           const patternCtx = patternCanvas.getContext("2d");
           patternCtx.clearRect(0, 0, patternCanvas.width, patternCanvas.height);
-
           const fullPattern = [...historicalPattern, ...futurePattern];
           const labels = fullPattern.map((_, i) =>
             i < historicalPattern.length
               ? `-${historicalPattern.length - i}m`
               : `+${i - historicalPattern.length + 1}m`
           );
-
           patternChart = new Chart(patternCtx, {
             type: "line",
             data: {
@@ -271,22 +246,12 @@
               plugins: { legend: { labels: { color: "#eee" } } },
             },
           });
-
-          summaryEl.innerHTML = `Found ${similarCount} similar patterns.<br>Most similar pattern direction: <strong>${predictedTrend}</strong><br>MSE: <strong>${mse.toFixed(
-            8
-          )}</strong>`;
-        } catch (error) {
-          console.error("Failed to load mostSimilar.json", error);
-          summaryEl.innerHTML = "Error loading pattern data.";
-          if (patternChart) {
-            patternChart.destroy();
-            patternChart = null;
-          }
         }
       }
 
-      loadMostSimilarPattern();
-      setInterval(loadMostSimilarPattern, 30000);
+      // Run immediately and every 30s
+      updateDashboard();
+      setInterval(updateDashboard, 30000);
     </script>
   </body>
 </html>
