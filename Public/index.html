@@ -4,21 +4,18 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>BTC/USD Dashboard</title>
-
     <link rel="stylesheet" href="btc_dashboard_style.css" />
-
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   </head>
   <body>
     <h1>BTC/USD Live Dashboard (MA crossing)</h1>
 
     <canvas id="btcChart" width="1400" height="500"></canvas>
-
     <div id="decision">Loading...</div>
 
     <div id="MostSimilarPattern" style="margin-top: 80px">
       <h2>Most Similar Pattern Visualization (Period: 5)</h2>
-      <canvas id="SimilarPattern" width="1400" height="300"> </canvas>
+      <canvas id="SimilarPattern" width="1400" height="300"></canvas>
       <div
         id="patternSummary"
         style="color: #ccc; font-size: 16px; margin-top: 10px"
@@ -31,57 +28,41 @@
     </div>
 
     <script>
-      loadDecision();
-      setInterval(loadDecision, 30000); // refresh every 30s
-      let diffChart;
-      let patternChart;
-
-      // Moving average function
+      let chart, diffChart, patternChart;
 
       function calculateMovingAverage(data, period) {
         let movingAverage = [];
         for (let i = 0; i < data.length; i++) {
           if (i >= period - 1) {
             let sum = 0;
-            for (let j = i - period + 1; j <= i; j++) {
-              sum += data[j];
-            }
+            for (let j = i - period + 1; j <= i; j++) sum += data[j];
             movingAverage.push(sum / period);
-          } else {
-            movingAverage.push(null);
-          }
+          } else movingAverage.push(null);
         }
         return movingAverage;
       }
 
-      // Max-min difference for volatility
       function calculateMaxMinDiff(data, period) {
         let maxMin = [];
         for (let i = 0; i < data.length; i++) {
           if (i >= period - 1) {
-            let min = Infinity;
-            let max = -Infinity;
+            let min = Infinity,
+              max = -Infinity;
             for (let j = i - period + 1; j <= i; j++) {
               if (data[j] < min) min = data[j];
               if (data[j] > max) max = data[j];
             }
             maxMin.push(max - min);
-          } else {
-            maxMin.push(null);
-          }
+          } else maxMin.push(null);
         }
         return maxMin;
       }
 
-      // Check if current index value is greater than previous index value
       function checkIdx(arr, idx) {
         if (idx <= 0 || arr[idx] === null || arr[idx - 1] === null)
           return false;
         return arr[idx] > arr[idx - 1];
       }
-
-      const ctx = document.getElementById("btcChart").getContext("2d");
-      let chart;
 
       async function loadData() {
         const res = await fetch(
@@ -95,19 +76,47 @@
         const ma5 = calculateMovingAverage(onlyClosePrices, 5);
         const ma30 = calculateMovingAverage(onlyClosePrices, 30);
         const diff5 = calculateMaxMinDiff(onlyClosePrices, 5);
-        // remove "null values, to avoid issue in chart"
-        const diff5clean = diff5.map(function (el) {
-          if (el === null) {
-            return 0;
-          } else {
-            return el;
-          }
-        });
 
+        // Last index for trend
         const lastIndex = onlyClosePrices.length - 1;
         const ma5GoingUp = checkIdx(ma5, lastIndex);
         const ma30GoingUp = checkIdx(ma30, lastIndex);
 
+        const liveTrend =
+          ma5GoingUp && ma30GoingUp
+            ? "bullish"
+            : !ma5GoingUp && !ma30GoingUp
+            ? "bearish"
+            : "neutral";
+
+        // Fetch mostSimilar.json to get predicted trend
+        let predictedTrend = "pattern not found";
+        let decision = "HOLD";
+
+        try {
+          const resPattern = await fetch("mostSimilar.json");
+          if (resPattern.ok) {
+            const patternData = await resPattern.json();
+            if (
+              patternData.futurePattern &&
+              patternData.futurePattern.length > 0
+            ) {
+              predictedTrend = patternData.direction || "pattern not found";
+              if (liveTrend === "bullish" && predictedTrend === "bullish")
+                decision = "BUY";
+              else if (liveTrend === "bearish" && predictedTrend === "bearish")
+                decision = "SELL";
+            }
+          }
+        } catch (err) {
+          console.warn("Failed to load mostSimilar.json:", err);
+        }
+
+        document.getElementById(
+          "decision"
+        ).innerText = `Decision: ${decision} | Live: ${liveTrend}, Predicted: ${predictedTrend}`;
+
+        // BTC Chart
         const datasets = [
           {
             label: "Close Price",
@@ -135,38 +144,26 @@
           },
         ];
 
-        if (chart) {
-          chart.destroy(); // destroy previous chart
-        }
+        const ctx = document.getElementById("btcChart").getContext("2d");
+        if (chart) chart.destroy();
         chart = new Chart(ctx, {
           type: "line",
-          data: {
-            labels: times,
-            datasets: datasets,
-          },
+          data: { labels: times, datasets },
           options: {
             responsive: false,
-            interaction: {
-              mode: "index",
-              intersect: false,
-            },
+            interaction: { mode: "index", intersect: false },
             scales: {
               x: { ticks: { color: "#aaa" } },
               y: { ticks: { color: "#aaa" } },
             },
-            plugins: {
-              legend: { labels: { color: "#eee" } },
-            },
+            plugins: { legend: { labels: { color: "#eee" } } },
           },
         });
 
-        // third  chart for max-min difference
+        // Max-Min Diff Chart
+        const diffClean = diff5.map((v) => (v === null ? 0 : v));
         const diffCtx = document.getElementById("diffChart").getContext("2d");
-
-        if (diffChart) {
-          diffChart.destroy(); // destroy old chart instance
-        }
-
+        if (diffChart) diffChart.destroy();
         diffChart = new Chart(diffCtx, {
           type: "bar",
           data: {
@@ -174,7 +171,7 @@
             datasets: [
               {
                 label: "Max-Min absolute Diff (Period 5)",
-                data: diff5clean,
+                data: diffClean,
                 backgroundColor: "orange",
               },
             ],
@@ -185,9 +182,7 @@
               x: { ticks: { color: "#aaa" } },
               y: { ticks: { color: "#aaa" } },
             },
-            plugins: {
-              legend: { labels: { color: "#eee" } },
-            },
+            plugins: { legend: { labels: { color: "#eee" } } },
           },
         });
       }
@@ -195,14 +190,11 @@
       loadData();
       setInterval(loadData, 30000);
 
-      // similar pattern visualization
-
       async function loadMostSimilarPattern() {
         const summaryEl = document.getElementById("patternSummary");
         try {
           const res = await fetch("mostSimilar.json");
           if (!res.ok) {
-            console.warn("mostSimilar.json not found:", res.status);
             summaryEl.innerHTML = "No valid similar pattern found.";
             if (patternChart) {
               patternChart.destroy();
@@ -212,13 +204,13 @@
           }
 
           const data = await res.json();
-
           const {
             futurePattern,
             historicalPattern,
             direction,
             mse,
             similarCount,
+            predictedTrend,
           } = data;
 
           if (
@@ -227,39 +219,25 @@
             similarCount === 0
           ) {
             summaryEl.innerHTML = "No valid similar pattern found.";
-
-            // Clear old chart if needed
             if (patternChart) {
               patternChart.destroy();
               patternChart = null;
             }
-
             return;
           }
 
-          // elimate previous pattern to avoid drawing over existing charts (we want new chart which is drawn every refresh)
-          if (patternChart) {
-            patternChart.destroy();
-          }
-
-          // clean canvas
+          if (patternChart) patternChart.destroy();
 
           const patternCanvas = document.getElementById("SimilarPattern");
           const patternCtx = patternCanvas.getContext("2d");
-
-          //  Now we can safely clear
           patternCtx.clearRect(0, 0, patternCanvas.width, patternCanvas.height);
 
-          // Combine historical + future data
-          const fullPattern = [...(historicalPattern || []), ...futurePattern];
-
-          // Generate labels like -30m to +30m
-          const labels = fullPattern.map((_, i) => {
-            if (i < historicalPattern.length)
-              return `-${historicalPattern.length - i}m`;
-            return `+${i - historicalPattern.length + 1}m`;
-          });
-          console.log("Historical pattern data:", historicalPattern);
+          const fullPattern = [...historicalPattern, ...futurePattern];
+          const labels = fullPattern.map((_, i) =>
+            i < historicalPattern.length
+              ? `-${historicalPattern.length - i}m`
+              : `+${i - historicalPattern.length + 1}m`
+          );
 
           patternChart = new Chart(patternCtx, {
             type: "line",
@@ -272,7 +250,7 @@
                   borderWidth: 2,
                   fill: false,
                   pointRadius: 0,
-                  borderColor: "blue", // fallback, segment overrides this
+                  borderColor: "blue",
                   segment: {
                     borderColor: (ctx) =>
                       ctx.p0DataIndex < historicalPattern.length
@@ -290,66 +268,25 @@
                 x: { ticks: { color: "#aaa" } },
                 y: { ticks: { color: "#aaa" } },
               },
-              plugins: {
-                legend: { labels: { color: "#eee" } },
-              },
+              plugins: { legend: { labels: { color: "#eee" } } },
             },
           });
 
-          // Update pattern summary
-          summaryEl.innerHTML = `
-  Found ${similarCount ?? "?"} similar patterns.<br>
-  Most similar pattern direction: <strong>${direction}</strong><br>
-  MSE: <strong>${mse.toFixed(8)}</strong>
-`;
+          summaryEl.innerHTML = `Found ${similarCount} similar patterns.<br>Most similar pattern direction: <strong>${predictedTrend}</strong><br>MSE: <strong>${mse.toFixed(
+            8
+          )}</strong>`;
         } catch (error) {
           console.error("Failed to load mostSimilar.json", error);
           summaryEl.innerHTML = "Error loading pattern data.";
-
           if (patternChart) {
             patternChart.destroy();
             patternChart = null;
           }
         }
       }
+
       loadMostSimilarPattern();
       setInterval(loadMostSimilarPattern, 30000);
-
-      async function loadDecision() {
-        try {
-          const res = await fetch("mostSimilar.json");
-          const data = await res.json();
-
-          const liveTrend = data.liveTrend ?? "neutral";
-          let predictedTrend;
-
-          if (
-            Array.isArray(data.futurePattern) &&
-            data.futurePattern.length > 0
-          ) {
-            predictedTrend = data.predictedTrend ?? "neutral";
-          } else {
-            predictedTrend = "pattern not found";
-          }
-
-          let decision = "HOLD";
-          if (liveTrend === "bullish" && predictedTrend === "bullish") {
-            decision = "BUY";
-          } else if (liveTrend === "bearish" && predictedTrend === "bearish") {
-            decision = "SELL";
-          }
-
-          document.getElementById(
-            "decision"
-          ).innerText = `Decision: ${decision} | Live: ${liveTrend}, Predicted: ${predictedTrend}`;
-        } catch (err) {
-          console.error("Error fetching mostSimilar.json", err);
-          document.getElementById("decision").innerText = "Decision: HOLD";
-        }
-      }
-
-      loadDecision();
-      setInterval(loadDecision, 30000); // refresh every 30s
     </script>
   </body>
 </html>
