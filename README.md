@@ -29,14 +29,18 @@ gives you a hands-on look at **pattern recognition in financial markets**.
 -  5 Go in the market to either buy or sell, depending on the decision engine.
 
 ## 🖼️ Dashboard Preview 
-- **Price + moving averages** ![DB_MA crossing](https://github.com/user-attachments/assets/2a861f68-f86a-424d-b14d-4c9566cc3b11)
-- **Most similar historical patterns + Projected outcome for the next 30 minutes**![DB_matching_pattern](https://github.com/user-attachments/assets/1c78eb2d-a289-485d-876a-4e184afedcf7)
+- **Price + moving averages** ![Updated_1](https://github.com/user-attachments/assets/20fa01a3-a2ab-4793-b49f-4d4f1da0d834)
+
+
+- **Most similar historical patterns + Projected outcome for the next 30 minutes**![Updated_2](https://github.com/user-attachments/assets/ea196b06-6bac-4747-bbd0-a43dc3d1aeca)
+
 - **max/min MA difference** ![DB_max min ma difference](https://github.com/user-attachments/assets/93d8890f-d522-4ab4-b589-2777e282a875)
 
 ## 🖼️ Dashboard "in action" next to real Vantage account (for testing) 
    - tips to understand the graph called "Most Similar Pattern Visualization (Period: 5)" :
    - the blueline is the current MA 5 minutes price, the red line connected to the blue line is the probable price prediction, that's why the time is represented with +1/+2/+3/+4/+5 minutes... till +30 minute
-   - ![dashboard](https://github.com/user-attachments/assets/ca3c3bee-850c-472b-9c4c-097c27f99cfd)
+   - ![chrome_9vomZXmXAj](https://github.com/user-attachments/assets/9ecada23-7aa7-4bf1-9adc-ac2505ed0bfa)
+
 
  
 
