@@ -23,8 +23,6 @@
         id="patternSummary"
         style="color: #ccc; font-size: 16px; margin-top: 10px"
       ></div>
-      <div id="zoneLabel" style="font-size: 1.2rem; margin-top: 20px; font-weight: bold;">
-  Loading pattern classification...
     </div>
 
     <div id="diffChartContainer" style="margin-top: 40px">
@@ -33,6 +31,8 @@
     </div>
 
     <script>
+      loadDecision();
+      setInterval(loadDecision, 30000); // refresh every 30s
       let diffChart;
       let patternChart;
 
@@ -107,13 +107,6 @@
         const lastIndex = onlyClosePrices.length - 1;
         const ma5GoingUp = checkIdx(ma5, lastIndex);
         const ma30GoingUp = checkIdx(ma30, lastIndex);
-
-        let decision;
-        if (ma5GoingUp && ma30GoingUp) decision = "BUY";
-        else if (!ma5GoingUp && !ma30GoingUp) decision = "SELL";
-        else decision = "HOLD";
-
-        document.getElementById("decision").innerText = `Decision: ${decision}`;
 
         const datasets = [
           {
@@ -205,161 +198,158 @@
       // similar pattern visualization
 
       async function loadMostSimilarPattern() {
-  const summaryEl = document.getElementById("patternSummary");
-  try {
-    const res = await fetch("mostSimilar.json");
-    if (!res.ok) {
-      console.warn("mostSimilar.json not found:", res.status);
-      summaryEl.innerHTML = "No valid similar pattern found.";
-      if (patternChart) {
-        patternChart.destroy();
-        patternChart = null;
-      }
-      // Also clear zoneLabel if data missing
-      const zoneEl = document.getElementById("zoneLabel");
-      zoneEl.textContent = "No pattern zone classification available.";
-      zoneEl.style.color = "inherit";
-      return;
-    }
+        const summaryEl = document.getElementById("patternSummary");
+        try {
+          const res = await fetch("mostSimilar.json");
+          if (!res.ok) {
+            console.warn("mostSimilar.json not found:", res.status);
+            summaryEl.innerHTML = "No valid similar pattern found.";
+            if (patternChart) {
+              patternChart.destroy();
+              patternChart = null;
+            }
+            return;
+          }
 
-    const data = await res.json();
+          const data = await res.json();
 
-    const {
-      futurePattern,
-      historicalPattern = [],
-      direction,
-      mse,
-      similarCount,
-      patternStartPrice,
-      patternEndPrice,
-      dayLow,
-      dayHigh,
-    } = data;
+          const {
+            futurePattern,
+            historicalPattern,
+            direction,
+            mse,
+            similarCount,
+          } = data;
 
-    if (
-      !Array.isArray(futurePattern) ||
-      futurePattern.length === 0 ||
-      similarCount === 0
-    ) {
-      summaryEl.innerHTML = "No valid similar pattern found.";
+          if (
+            !Array.isArray(futurePattern) ||
+            futurePattern.length === 0 ||
+            similarCount === 0
+          ) {
+            summaryEl.innerHTML = "No valid similar pattern found.";
 
-      if (patternChart) {
-        patternChart.destroy();
-        patternChart = null;
-      }
+            // Clear old chart if needed
+            if (patternChart) {
+              patternChart.destroy();
+              patternChart = null;
+            }
 
-      const zoneEl = document.getElementById("zoneLabel");
-      zoneEl.textContent = "No pattern zone classification available.";
-      zoneEl.style.color = "inherit";
-      return;
-    }
+            return;
+          }
 
-    if (patternChart) {
-      patternChart.destroy();
-    }
+          // elimate previous pattern to avoid drawing over existing charts (we want new chart which is drawn every refresh)
+          if (patternChart) {
+            patternChart.destroy();
+          }
 
-    const patternCanvas = document.getElementById("SimilarPattern");
-    const patternCtx = patternCanvas.getContext("2d");
+          // clean canvas
 
-    patternCtx.clearRect(0, 0, patternCanvas.width, patternCanvas.height);
+          const patternCanvas = document.getElementById("SimilarPattern");
+          const patternCtx = patternCanvas.getContext("2d");
 
-    const fullPattern = [...historicalPattern, ...futurePattern];
+          //  Now we can safely clear
+          patternCtx.clearRect(0, 0, patternCanvas.width, patternCanvas.height);
 
-    const labels = fullPattern.map((_, i) => {
-      if (i < historicalPattern.length)
-        return `-${historicalPattern.length - i}m`;
-      return `+${i - historicalPattern.length + 1}m`;
-    });
+          // Combine historical + future data
+          const fullPattern = [...(historicalPattern || []), ...futurePattern];
 
-    patternChart = new Chart(patternCtx, {
-      type: "line",
-      data: {
-        labels,
-        datasets: [
-          {
-            label: `Pattern | MSE: ${mse.toFixed(4)}`,
-            data: fullPattern,
-            borderWidth: 2,
-            fill: false,
-            pointRadius: 0,
-            borderColor: "blue",
-            segment: {
-              borderColor: (ctx) =>
-                ctx.p0DataIndex < historicalPattern.length
-                  ? "blue"
-                  : direction === "bullish"
-                  ? "green"
-                  : "red",
+          // Generate labels like -30m to +30m
+          const labels = fullPattern.map((_, i) => {
+            if (i < historicalPattern.length)
+              return `-${historicalPattern.length - i}m`;
+            return `+${i - historicalPattern.length + 1}m`;
+          });
+          console.log("Historical pattern data:", historicalPattern);
+
+          patternChart = new Chart(patternCtx, {
+            type: "line",
+            data: {
+              labels,
+              datasets: [
+                {
+                  label: `Pattern | MSE: ${mse.toFixed(4)}`,
+                  data: fullPattern,
+                  borderWidth: 2,
+                  fill: false,
+                  pointRadius: 0,
+                  borderColor: "blue", // fallback, segment overrides this
+                  segment: {
+                    borderColor: (ctx) =>
+                      ctx.p0DataIndex < historicalPattern.length
+                        ? "blue"
+                        : direction === "bullish"
+                        ? "green"
+                        : "red",
+                  },
+                },
+              ],
             },
-          },
-        ],
-      },
-      options: {
-        responsive: false,
-        scales: {
-          x: { ticks: { color: "#aaa" } },
-          y: { ticks: { color: "#aaa" } },
-        },
-        plugins: {
-          legend: { labels: { color: "#eee" } },
-        },
-      },
-    });
+            options: {
+              responsive: false,
+              scales: {
+                x: { ticks: { color: "#aaa" } },
+                y: { ticks: { color: "#aaa" } },
+              },
+              plugins: {
+                legend: { labels: { color: "#eee" } },
+              },
+            },
+          });
 
-    // Summary text
-    summaryEl.innerHTML = `
-      Found ${similarCount ?? "?"} similar patterns.<br>
-      Most similar pattern direction: <strong>${direction}</strong><br>
-      MSE: <strong>${mse.toFixed(8)}</strong><br>
-      (Start: ${patternStartPrice}, End: ${patternEndPrice}, Low: ${dayLow}, High: ${dayHigh})
-    `;
+          // Update pattern summary
+          summaryEl.innerHTML = `
+  Found ${similarCount ?? "?"} similar patterns.<br>
+  Most similar pattern direction: <strong>${direction}</strong><br>
+  MSE: <strong>${mse.toFixed(8)}</strong>
+`;
+        } catch (error) {
+          console.error("Failed to load mostSimilar.json", error);
+          summaryEl.innerHTML = "Error loading pattern data.";
 
-    // Calculate zone classification
-    const rangeDay = dayHigh - dayLow || 1;
-    const normalizedStart = ((patternStartPrice - dayLow) / rangeDay) * 100;
-    const normalizedEnd = ((patternEndPrice - dayLow) / rangeDay) * 100;
-
-    let zone;
-    if (normalizedStart < 33 && normalizedEnd < 33) {
-      zone = "Support";
-    } else if (normalizedStart > 66 && normalizedEnd > 66) {
-      zone = "Resistance";
-    } else {
-      zone = "Neutral";
-    }
-
-    // Update zoneLabel element
-    const zoneEl = document.getElementById("zoneLabel");
-    zoneEl.textContent = `Most similar pattern is in the ${zone} zone.`;
-
-    switch (zone) {
-      case "Support":
-        zoneEl.style.color = "green";
-        break;
-      case "Resistance":
-        zoneEl.style.color = "red";
-        break;
-      default:
-        zoneEl.style.color = "orange";
-    }
-  } catch (error) {
-    console.error("Failed to load mostSimilar.json", error);
-    const summaryEl = document.getElementById("patternSummary");
-    summaryEl.innerHTML = "Error loading pattern data.";
-
-    if (patternChart) {
-      patternChart.destroy();
-      patternChart = null;
-    }
-
-    const zoneEl = document.getElementById("zoneLabel");
-    zoneEl.textContent = "Error loading pattern zone classification.";
-    zoneEl.style.color = "inherit";
-  }
-}
-
+          if (patternChart) {
+            patternChart.destroy();
+            patternChart = null;
+          }
+        }
+      }
       loadMostSimilarPattern();
       setInterval(loadMostSimilarPattern, 30000);
+
+      async function loadDecision() {
+        try {
+          const res = await fetch("mostSimilar.json");
+          const data = await res.json();
+
+          const liveTrend = data.liveTrend ?? "neutral";
+          let predictedTrend;
+
+          if (
+            Array.isArray(data.futurePattern) &&
+            data.futurePattern.length > 0
+          ) {
+            predictedTrend = data.predictedTrend ?? "neutral";
+          } else {
+            predictedTrend = "pattern not found";
+          }
+
+          let decision = "HOLD";
+          if (liveTrend === "bullish" && predictedTrend === "bullish") {
+            decision = "BUY";
+          } else if (liveTrend === "bearish" && predictedTrend === "bearish") {
+            decision = "SELL";
+          }
+
+          document.getElementById(
+            "decision"
+          ).innerText = `Decision: ${decision} | Live: ${liveTrend}, Predicted: ${predictedTrend}`;
+        } catch (err) {
+          console.error("Error fetching mostSimilar.json", err);
+          document.getElementById("decision").innerText = "Decision: HOLD";
+        }
+      }
+
+      loadDecision();
+      setInterval(loadDecision, 30000); // refresh every 30s
     </script>
   </body>
 </html>
