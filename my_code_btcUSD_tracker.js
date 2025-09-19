@@ -218,197 +218,140 @@ function refresh(preMovePattern) {
   https.get(url, function (apiResponse) {
     let data = "";
 
-    // we add event listener to receive chunks of data
     apiResponse.on("data", function (chunk) {
-      data = data + chunk;
+      data += chunk;
     });
-    // once all data arrived, parse JSON string into a JSON object
+
     apiResponse.on("end", function () {
       const parsed = JSON.parse(data);
-      // create an array of arrays in js so we can create new object from it with date and close price
-      const candles = parsed.map(function (element) {
-        return {
-          time: new Date(element[0]),
-          closePrice: parseFloat(element[4]),
-        };
-      });
-      //console.log(candles);
+
+      // Map to candle objects
+      const candles = parsed.map((element) => ({
+        time: new Date(element[0]),
+        closePrice: parseFloat(element[4]),
+      }));
+
       console.log(`Total candles fetched: ${parsed.length}`);
 
-      const onlyClosePrices = candles.map(function (candle) {
-        return candle.closePrice;
-      });
+      const onlyClosePrices = candles.map((c) => c.closePrice);
 
-      //console.log(onlyClosePrices);
+      // Calculate moving averages
+      const ma5 = calculateMovingAverage(onlyClosePrices, 5);
+      const ma30 = calculateMovingAverage(onlyClosePrices, 30);
 
-      // Calculate current moving averages
-      const ma5 = calculateMovingAverage(onlyClosePrices, 5); // calculate  moving average price over 5 minutes
-      const ma30 = calculateMovingAverage(onlyClosePrices, 30); // calculate  moving average price over 30 minutes
-
-      // prevent normalised current ma5 to get bad data
-      if (ma5.filter((v) => v !== null).length < 30) {
-        console.warn("Not enough data to normalize live MA5.");
-        return;
-      }
-
-      // we cant take the null values cause will fuck up the normalization... after we can normalize
+      // Check if enough data to normalize MA5
       const recentMa5 = ma5.slice(-30);
       if (recentMa5.includes(null)) {
         console.warn("Not enough valid MA5 data for comparison.");
         return;
       }
       const normalizedLivema5 = normalize(recentMa5);
-
       console.log("Normalized live MA5:", normalizedLivema5);
 
-      // comparng the normalised historical ma5 with normalised current live data
+      // Compare normalized historical patterns with live MA5
+      const comparisonResults = preMovePattern.map((p) => ({
+        ...p,
+        mse: mse(normalizedLivema5, p.normalizedPattern),
+      }));
 
-      const comparisonResults = preMovePattern.map((p) => {
-        const error = mse(normalizedLivema5, p.normalizedPattern);
-        return { ...p, mse: error };
-      });
       const sorted = comparisonResults.sort((a, b) => a.mse - b.mse);
       const mostSimilar = sorted[0];
-      const threshold = 0.05; // You can tweak this for sensitivity
+      const threshold = 0.045;
       const similarPatterns = sorted.filter((p) => p.mse < threshold);
 
-      // pulling the next 30 minutes from the historical from the normalised patterm and the current pattern
+      // Extract future pattern from historical MA
       if (similarPatterns.length > 0 && mostSimilar) {
         const startOfPattern = mostSimilar.index;
         const patternLength = mostSimilar.pattern.length;
-
         const endOfPattern = startOfPattern + patternLength;
         const futureStart = endOfPattern;
 
-        let futurePattern = [];
         if (futureStart + 30 <= normalizedMA52024.length) {
-          // This gives us the 30 minutes *after* the matched pattern
-          futurePattern = normalizedMA52024.slice(
+          mostSimilar.futurePattern = normalizedMA52024.slice(
             futureStart,
             futureStart + 30
           );
-          mostSimilar.futurePattern = futurePattern;
-
-          // This gives us the matched pattern itself
-          const matchedPattern = normalizedMA52024.slice(
+          mostSimilar.historicalPattern = normalizedMA52024.slice(
             startOfPattern,
             endOfPattern
           );
-          mostSimilar.historicalPattern = matchedPattern;
-
-          console.log("Matched (normalized):", matchedPattern);
-          console.log("Future (normalized):", futurePattern);
+          console.log("Matched (normalized):", mostSimilar.historicalPattern);
+          console.log("Future (normalized):", mostSimilar.futurePattern);
         } else {
           console.warn(
             "Not enough historical data to extract full future pattern."
           );
         }
       }
-      // print the results to console
 
+      // Log similar patterns info
       if (similarPatterns.length > 0 && mostSimilar) {
         console.log(`Found ${similarPatterns.length} similar patterns.`);
         console.log(`Most similar pattern direction: ${mostSimilar.direction}`);
         console.log(`MSE: ${mostSimilar.mse}`);
-        console.log(
-          "Future (normalized) after similar pattern:",
-          mostSimilar.futurePattern
-        );
       } else {
-        console.log(" Found 0 similar patterns.");
+        console.log("Found 0 similar patterns.");
       }
 
-      const historicalStartIdx = mostSimilar.index;
-      const historicalEndIdx = historicalStartIdx + mostSimilar.pattern.length;
-      const futureEndIdx = historicalEndIdx + 30;
+      // Create JSON output including decision
+      const output = {
+        futurePattern:
+          mostSimilar && mostSimilar.futurePattern
+            ? mostSimilar.futurePattern
+            : [],
+        historicalPattern:
+          mostSimilar && mostSimilar.historicalPattern
+            ? mostSimilar.historicalPattern
+            : [],
+        direction: mostSimilar ? mostSimilar.direction : null,
+        mse: mostSimilar ? mostSimilar.mse : null,
+        similarCount: similarPatterns.length,
+      };
 
-      const historicalOriginal = onlyPriceClose2024.slice(
-        historicalStartIdx,
-        historicalEndIdx
-      );
-      const futureOriginal = onlyPriceClose2024.slice(
-        historicalEndIdx,
-        futureEndIdx
-      );
-
-      const combinedOriginal = [...historicalOriginal, ...futureOriginal];
-
-      // Calculate additional info for visualization
-      const patternStartPrice = historicalOriginal[0];
-      const patternEndPrice = futureOriginal[futureOriginal.length - 1];
-      const dayLow = Math.min(...combinedOriginal);
-      const dayHigh = Math.max(...combinedOriginal);
-
-      // creating JSON file of the most similar pattern so we can visualize data in HTML
-
-      if (
-        similarPatterns.length > 0 &&
-        mostSimilar &&
-        mostSimilar.futurePattern
-      ) {
-        const output = {
-          futurePattern: mostSimilar.futurePattern,
-          historicalPattern: mostSimilar.historicalPattern,
-          direction: mostSimilar.direction,
-          mse: mostSimilar.mse,
-          similarCount: similarPatterns.length,
-          patternStartPrice,
-          patternEndPrice,
-          dayLow,
-          dayHigh,
-        };
-
-        fs.writeFileSync(
-          "public/mostSimilar.json",
-          JSON.stringify(output),
-          "utf8"
-        );
-        console.log("✅ mostSimilar.json written!");
-      } else {
-        console.log("No valid similar pattern found — skipping JSON export.");
-
-        const emptyOutput = {
-          futurePattern: [],
-          historicalPattern: [],
-          direction: null,
-          mse: null,
-          similarCount: 0,
-        };
-
-        fs.writeFileSync(
-          "public/mostSimilar.json",
-          JSON.stringify(emptyOutput, null, 2),
-          "utf8"
-        );
-      }
-
-      // checking diretion of trend ( going up??)
+      // Determine live trend
       const lastIndex = onlyClosePrices.length - 1;
-
       const ma5GoingUp = checkIdx(ma5, lastIndex);
       const ma30GoingUp = checkIdx(ma30, lastIndex);
 
-      // decision making
-      let decision;
+      const liveTrend =
+        ma5GoingUp && ma30GoingUp
+          ? "bullish"
+          : !ma5GoingUp && !ma30GoingUp
+          ? "bearish"
+          : "neutral";
 
-      if (ma5GoingUp && ma30GoingUp) {
-        decision = "BUY";
-      } else if (!ma5GoingUp && !ma30GoingUp) {
-        decision = "SELL";
-      } else {
-        decision = "HOLD";
+      // Determine predicted trend from future pattern
+      let predictedTrend = null;
+      if (mostSimilar && mostSimilar.futurePattern) {
+        predictedTrend = getTrendDirection(mostSimilar.futurePattern);
       }
 
-      // checking if it is working
+      // Make decision based on live and predicted trends
+      let decision = "HOLD";
+      if (liveTrend === "bullish" && predictedTrend === "bullish") {
+        decision = "BUY";
+      } else if (liveTrend === "bearish" && predictedTrend === "bearish") {
+        decision = "SELL";
+      }
 
-      //console.log(`MA5 going up? ${ma5GoingUp}`);
-      //console.log(`MA30 going up? ${ma30GoingUp}`);
-      //console.log(`Decision: ${decision}`);
+      // Add trends and decision to JSON output
+      output.liveTrend = liveTrend;
+      output.predictedTrend = predictedTrend;
+      output.decision = decision;
 
+      // Write JSON file
+      fs.writeFileSync(
+        "public/mostSimilar.json",
+        JSON.stringify(output, null, 2),
+        "utf8"
+      );
+      console.log("✅ mostSimilar.json written with decision!");
+      console.log("Live Trend:", liveTrend);
+      console.log("Predicted Trend:", predictedTrend);
+      console.log("Decision:", decision);
+
+      // Optional: additional info
       const priceDiff5 = calculateMaxMinDiff(onlyClosePrices, 5);
-      //const priceDiff30 = calculateMaxMinDiff(onlyClosePrices, 30);
-      //console.log(priceDiff5);
-      //console.log(priceDiff30);
     });
   });
 }
