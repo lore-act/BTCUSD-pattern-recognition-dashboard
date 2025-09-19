@@ -38,7 +38,7 @@ gives you a hands-on look at **pattern recognition in financial markets**.
 
 ## 🖼️ Dashboard "in action" next to real Vantage account (for testing) 
    - tips to understand the graph called "Most Similar Pattern Visualization (Period: 5)" :
-   - the blueline is the current MA 5 minutes price, the red line connected to the blue line is the probable price prediction, that's why the time is represented with +1/+2/+3/+4/+5 minutes... till +30 minute
+   - the blueline is the current MA 5 minutes price, the green line connected to the blue line is the probable price prediction, that's why the time is represented with +1/+2/+3/+4/+5 minutes... till +30 minute
    - ![chrome_9vomZXmXAj](https://github.com/user-attachments/assets/9ecada23-7aa7-4bf1-9adc-ac2505ed0bfa)
 
 
